@@ -54,17 +54,27 @@ func main() {
 
 		// 调用 LLM
 		fmt.Print("🤖 AI: ")
-		reply, usage, err := client.Chat(messages)
+		// reply, usage, err := client.Chat(messages)
+		stream, err := client.ChatStream(messages)
 		if err != nil {
 			fmt.Printf("\n❌ %v\n", err)
 			messages = messages[:len(messages)-1]
 			continue
 		}
 
-		fmt.Println(reply)
-		totalTokens += usage.TotalTokens
+		//fmt.Println(reply)
+		//totalTokens += usage.TotalTokens
+
+		// 用 for range 读取 channel，逐 token 打印
+		var fullReply strings.Builder
+		for token := range stream {
+			fmt.Print(token)
+			fullReply.WriteString(token)
+		}
+		fmt.Println()
 
 		// 加入 AI 回复
+		reply := fullReply.String()
 		messages = append(messages, llm.Message{Role: "assistant", Content: reply})
 		fmt.Printf("(%d Token)\n", totalTokens)
 

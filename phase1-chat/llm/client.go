@@ -3,11 +3,13 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/maxfeizi04-cloud/go-ai-learning/phase1-chat/config"
 )
@@ -107,4 +109,95 @@ func (c *Client) Chat(messages []Message) (string, Usage, error) {
 	}
 
 	return result.Choices[0].Message.Content, result.Usage, nil
+}
+
+// ChatStream 发送消息并以流式方式接收回复
+// 返回值是一个只读 channel,调用方用 for range 读取即可
+// channel 会在流结束后自动关闭
+func (c *Client) ChatStream(messages []Message) (<-chan string, error) {
+	// 构造请求体 (和 Chat 一样，只是 stream 改为 true)
+	apiMessages := make([]map[string]string, len(messages))
+	for i, m := range messages {
+		apiMessages[i] = map[string]string{
+			"role":    m.Role,
+			"content": m.Content,
+		}
+	}
+
+	reqBody := map[string]interface{}{
+		"model":    c.cfg.Model,
+		"messages": apiMessages,
+		"stream":   true, // 开启流式输出
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求失败: %w", err)
+	}
+	url := c.cfg.BaseURL + "/chat/completions"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	req.Header.Set("Accept", "text/event-stream") // 告诉服务器我们要 SSE
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求发送失败: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		errBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API 错误 (状态码 %d): %s", resp.StatusCode, string(errBody))
+	}
+
+	// 创建带缓冲的 channel, 缓冲防止 goroutine 阻塞
+	ch := make(chan string, 100)
+
+	// 启动 goroutine 在后台读取流
+	go func() {
+		defer resp.Body.Close()
+		defer close(ch) // goroutine 结束时关闭 channel
+
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// SSE 数据行以 "data: " 开头
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+
+			data := strings.TrimPrefix(line, "data: ")
+
+			// 流结束标记
+			if data == "[DONE]" {
+				return
+			}
+
+			// 解析 JSON 获取 delta.content
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue // 解析失败就跳过这一行
+			}
+
+			if len(chunk.Choices) > 0 {
+				token := chunk.Choices[0].Delta.Content
+				if token != "" {
+					ch <- token // 发送 token 到 channel
+				}
+			}
+		}
+	}()
+	return ch, nil
 }
