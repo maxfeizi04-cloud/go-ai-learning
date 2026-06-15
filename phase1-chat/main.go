@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 )
 
 // ==========================================
@@ -29,7 +31,6 @@ type ChatRequest struct {
 
 // Choice 是 API 返回的候选项
 type Choice struct {
-	Index   int     `json:"index"`
 	Message Message `json:"message"`
 }
 
@@ -47,33 +48,18 @@ type ChatResponse struct {
 	Usage   Usage    `json:"usage"`
 }
 
-func main() {
-	// -------------------------------------------------
-	// 第1步：从环境变量读取 API Key
-	// -------------------------------------------------
-	apiKey := os.Getenv("DEEPSEEK_API_KEY")
-	if apiKey == "" {
-		fmt.Println("❌ 请先设置环境变量 DEEPSEEK_API_KEY")
-		fmt.Println("   export DEEPSEEK_API_KEY=\\\"sk-xxx\\\"")
-		os.Exit(1)
-	}
+// ---------- API 调用函数（把昨天的逻辑封装成函数） ----------
 
+// callAPI 发送对话历史到 DeepSeek，返回 AI 的回复文本
+// 这是整个程序最核心的函数 —— 把 HTTP 细节封装起来
+func callAPI(apiKey string, message []Message) (string, Usage, error) {
 	// -------------------------------------------------
-	// 第2步：构造请求体
+	// 第1步：构造请求体
 	// -------------------------------------------------
 	reqBody := ChatRequest{
-		Model: "deepseek-v4-flash",
-		Messages: []Message{
-			{
-				Role:    "system",
-				Content: "你是一个乐于助人的编程助手,回答简洁准确.",
-			},
-			{
-				Role:    "user",
-				Content: "用一句话介绍 Go 语言的核心特点",
-			},
-		},
-		Stream: false,
+		Model:    "deepseek-v4-flash",
+		Messages: message,
+		Stream:   false,
 	}
 
 	// json.Marshal 把 Go 结构体序列化成 JSON 字节
@@ -84,7 +70,7 @@ func main() {
 	}
 
 	// -------------------------------------------------
-	// 第3步：创建 HTTP 请求
+	// 第2步：创建 HTTP 请求
 	// -------------------------------------------------
 	req, err := http.NewRequest(
 		"POST",
@@ -101,7 +87,7 @@ func main() {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// -------------------------------------------------
-	// 第4步：发送请求
+	// 第3步：发送请求
 	// -------------------------------------------------
 	fmt.Println("🚀 正在调用 DeepSeek API...")
 	client := &http.Client{}
@@ -113,7 +99,7 @@ func main() {
 	defer resp.Body.Close()
 
 	// -------------------------------------------------
-	// 第5步：读取并解析响应
+	// 第4步：读取并解析响应
 	// -------------------------------------------------
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -134,15 +120,87 @@ func main() {
 		os.Exit(1)
 	}
 
+	if len(chatResp.Choices) == 0 {
+		return "", Usage{}, fmt.Errorf("API 返回了空的回复")
+	}
+
+	return chatResp.Choices[0].Message.Content, chatResp.Usage, nil
+}
+
+func main() {
 	// -------------------------------------------------
-	// 第6步：打印结果
+	// 第1步：从环境变量读取 API Key
 	// -------------------------------------------------
-	if len(chatResp.Choices) > 0 {
-		fmt.Println("\n📝 AI 回复:")
-		fmt.Println("─────────────────────")
-		fmt.Println(chatResp.Choices[0].Message.Content)
-		fmt.Println("─────────────────────")
-		fmt.Printf("\n💰 Token 用量: 输入 %d + 输出 %d = 总计 %d\n",
-			chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, chatResp.Usage.TotalTokens)
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		fmt.Println("❌ 请先设置环境变量 DEEPSEEK_API_KEY")
+		fmt.Println("  export DEEPSEEK_API_KEY=\\\"sk-xxx\\\"")
+		os.Exit(1)
+	}
+
+	// 初始化对话历史,第一条是 system prompt
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: "你是一个乐于助人的编程助手,回答简洁准确.",
+		},
+	}
+
+	totalTokens := 0 // 累计 Token 消耗
+
+	fmt.Println("╔══════════════════════════════╗")
+	fmt.Println("║    🤖 AI Chat 命令行聊天      ║")
+	fmt.Println("║       输入 /exit 退出         ║")
+	fmt.Println("╚══════════════════════════════╝")
+	fmt.Println()
+
+	// 创建输入读取器
+	scanner := bufio.NewScanner(os.Stdin)
+
+	for {
+		// 打印提示符
+		fmt.Print("👤 你: ")
+		if !scanner.Scan() {
+			break // Ctrl+D 或读取错误
+		}
+
+		userInput := strings.TrimSpace(scanner.Text())
+		if userInput == "" {
+			continue // 忽略空输入
+		}
+
+		// 处理退出命令
+		if userInput == "/exit" || userInput == "/quit" {
+			fmt.Printf("\n👋 再见！本次会话共消耗 %d Token\n", totalTokens)
+			break
+		}
+
+		// 把用户消息加入历史
+		messages = append(messages, Message{
+			Role:    "user",
+			Content: userInput,
+		})
+
+		// 调用 API
+		fmt.Print("🤖 AI: ")
+		reply, usage, err := callAPI(apiKey, messages)
+		if err != nil {
+			fmt.Printf("\n❌ 错误: %v\n", err)
+			messages = messages[:len(messages)-1]
+			continue
+		}
+
+		// 打印回复并累计 Token
+		fmt.Println(reply)
+		totalTokens += usage.TotalTokens
+
+		// 把 AI 回复加入历史
+		messages = append(messages, Message{
+			Role:    "assistant",
+			Content: reply,
+		})
+
+		fmt.Printf("(本次消耗 %d Token | 累计 %d)\n\n",
+			usage.TotalTokens, totalTokens)
 	}
 }
