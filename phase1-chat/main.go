@@ -6,8 +6,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/maxfeizi04-cloud/go-ai-learning/phase1-chat/chat"
 	"github.com/maxfeizi04-cloud/go-ai-learning/phase1-chat/config"
-	"github.com/maxfeizi04-cloud/go-ai-learning/phase1-chat/llm"
+	"github.com/maxfeizi04-cloud/go-ai-learning/phase1-chat/provider"
 )
 
 func main() {
@@ -18,20 +19,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 创建 LLM 客户端
-	client := llm.NewClient(cfg)
+	// 创建 Provider 和 Session
+	prov := provider.NewDeepSeek(cfg)
+	session := chat.NewSession(prov, "你是一个乐于助人的编程助手，回答简洁准确.")
 
-	// 初始化对话历史
-	messages := []llm.Message{
-		{Role: "system", Content: "你是一个乐于助人的编程助手，回答简洁准确."},
-	}
-
-	totalTokens := 0
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("╔══════════════════════════════╗")
-	fmt.Println("║    🤖 AI Chat 命令行聊天    ║")
-	fmt.Println("║  输入 /exit 退出            ║")
+	fmt.Println("║    🤖 AI Chat 命令行聊天      ║")
+	fmt.Println("║   输入 /exit 退出             ║")
 	fmt.Println("╚══════════════════════════════╝")
 
 	for {
@@ -45,38 +41,32 @@ func main() {
 			continue
 		}
 		if input == "/exit" || input == "/quit" {
-			fmt.Printf("👋 再见！累计消耗 %d Token\n", totalTokens)
+			fmt.Printf("👋 再见!")
 			break
 		}
 
-		// 加入用户消息
-		messages = append(messages, llm.Message{Role: "user", Content: input})
-
-		// 调用 LLM
-		fmt.Print("🤖 AI: ")
-		// reply, usage, err := client.Chat(messages)
-		stream, err := client.ChatStream(messages)
-		if err != nil {
-			fmt.Printf("\n❌ %v\n", err)
-			messages = messages[:len(messages)-1]
+		// 先检查是不是内置命令
+		if session.HandleCommand(input) {
 			continue
 		}
 
-		//fmt.Println(reply)
-		//totalTokens += usage.TotalTokens
+		// 发送消息并显示流式回复
+		fmt.Print("🤖 AI: ")
+		stream, err := session.Send(input)
+		if err != nil {
+			fmt.Printf("\n❌ %v\n", err)
+			continue
+		}
 
-		// 用 for range 读取 channel，逐 token 打印
-		var fullReply strings.Builder
+		var reply strings.Builder
 		for token := range stream {
 			fmt.Print(token)
-			fullReply.WriteString(token)
+			reply.WriteString(token)
 		}
 		fmt.Println()
 
-		// 加入 AI 回复
-		reply := fullReply.String()
-		messages = append(messages, llm.Message{Role: "assistant", Content: reply})
-		fmt.Printf("(%d Token)\n", totalTokens)
+		// 归档完整回复
+		session.CollectReply(reply.String())
 
 	}
 }
