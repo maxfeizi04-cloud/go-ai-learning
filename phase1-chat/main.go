@@ -21,7 +21,7 @@ func main() {
 
 	// 创建 Provider 和 Session
 	prov := provider.NewDeepSeek(cfg)
-	session := chat.NewSession(prov, "你是一个乐于助人的编程助手，回答简洁准确.")
+	session := chat.NewSession(prov, "你是一个乐于助人的编程助手，回答简洁准确.", 4096)
 
 	scanner := bufio.NewScanner(os.Stdin)
 

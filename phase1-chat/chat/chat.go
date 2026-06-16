@@ -13,18 +13,51 @@ import (
 
 // Session 表示一次对话会话
 type Session struct {
-	prov        provider.Provider
-	history     []provider.Message
-	totalTokens int
+	prov             provider.Provider
+	history          []provider.Message
+	totalTokens      int
+	maxContextTokens int // 对话历史的最大 Token 数
 }
 
 // NewSession 创建新的对话会话
-func NewSession(prov provider.Provider, systemPrompt string) *Session {
+func NewSession(prov provider.Provider, systemPrompt string, maxContextTokens int) *Session {
 	return &Session{
 		prov: prov,
 		history: []provider.Message{
 			{Role: "system", Content: systemPrompt},
 		},
+		maxContextTokens: maxContextTokens,
+	}
+}
+
+// estimateTokens 估算消息列表的 Token 数
+// 粗略估算: 中文 ~ 1字 1.5 token,英文 ~ 1词 0.75 token
+// 这里简化：总字符数 / 2(偏保守的估计)
+func (s *Session) estimateTokens() int {
+	total := 0
+	for _, m := range s.history {
+		// 角色标签也占 Token,加少量开销
+		total += len([]rune(m.Content))/2 + 4
+	}
+	return total
+}
+
+// trimHistory 当历史过长是自动裁剪
+// 策略：保留 system prompt + 最近 N 条消息，中间用摘要代替
+func (s *Session) trimHistory() {
+	const minKeep = 4 // 至少保留 system(1) + 最近对话(3)
+	for s.estimateTokens() >= s.maxContextTokens && len(s.history) > minKeep {
+		// 找到 system prompt 之后最早的用户消息
+		idx := 1
+		if s.history[idx].Role == "assistant" {
+			idx = 2
+		}
+		if idx+1 < len(s.history) {
+			// 删除该轮对话 (user + assistant)
+			s.history = append(s.history[:idx], s.history[idx+2:]...)
+		} else {
+			break
+		}
 	}
 }
 
@@ -33,6 +66,9 @@ func NewSession(prov provider.Provider, systemPrompt string) *Session {
 func (s *Session) Send(userInput string) (<-chan string, error) {
 	// 加入用户消息
 	s.history = append(s.history, provider.Message{Role: "user", Content: userInput})
+
+	// 发送前检查并裁剪
+	s.trimHistory()
 
 	// 调用 LLM 流式接口
 	stream, err := s.prov.ChatStream(s.history)
