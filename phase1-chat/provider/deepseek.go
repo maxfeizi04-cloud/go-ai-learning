@@ -80,6 +80,7 @@ func (d *DeepSeek) ChatStream(messages []Message) (<-chan string, error) {
 		return nil, fmt.Errorf("请求发送失败: %w", err)
 	}
 
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		defer resp.Body.Close()
 		errBody, _ := io.ReadAll(resp.Body)
@@ -103,9 +104,10 @@ func (d *DeepSeek) buildRequest(messages []Message, stream bool) map[string]inte
 		}
 	}
 	return map[string]interface{}{
-		"model":    d.cfg.Model,
-		"messages": apiMessages,
-		"stream":   stream,
+		"model":       d.cfg.Model,
+		"messages":    apiMessages,
+		"stream":      stream,
+		"temperature": d.cfg.Temperature,
 	}
 }
 
