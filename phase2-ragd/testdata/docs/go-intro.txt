@@ -1,0 +1,30 @@
+Go 语言简介
+
+Go（又称 Golang）是 Google 开发的一种静态强类型、编译型语言。
+Go 语言的设计目标是提供一种简单、高效、可靠的编程体验。
+
+核心特性：
+1. 简洁的语法：Go 只有 25 个关键字，学习曲线平缓
+2. 原生并发：goroutine 和 channel 让并发编程变得简单
+3. 快速编译：大型项目也能在秒级完成编译
+4. 静态链接：编译成单个二进制文件，部署极其方便
+5. 垃圾回收：自动内存管理，避免内存泄漏
+6. 强大的标准库：内置 HTTP、JSON、加密、测试等
+
+Go 在云原生领域尤其流行，Docker、Kubernetes、Prometheus 等著名项目都是用 Go 写的。
+EOF
+
+cat > testdata/docs/go-concurrency.txt << 'EOF'
+Go 并发编程
+
+Go 的并发模型基于 CSP（Communicating Sequential Processes）理论。
+
+goroutine 是 Go 的轻量级线程，创建一个 goroutine 只需要在函数调用前加 go 关键字：
+  go myFunction()
+
+channel 是 goroutine 之间通信的管道：
+  ch := make(chan string)
+  ch <- "hello"    // 发送
+  msg := <-ch      // 接收
+
+Go 的并发哲学：不要通过共享内存来通信，而要通过通信来共享内存。
